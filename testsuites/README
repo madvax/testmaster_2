@@ -1,0 +1,27 @@
+Test Suite files for the Test Master 
+
+Test suite files are text files that have a list of test cases (srcipts/programs) 
+to run. The test master will assume that the test cases are in target folders 
+under the testcases folder. 
+
+Folder Structure: 
+
+/TestMasterHome  
+   |
+   +-- /testcases
+          |
+          +-- /TARGET_1
+          |      |
+          |      +-- testcase_01
+          |      +-- testcase_02
+          |      +-- testcase_03
+          |
+          +-- /TARGET_2
+          |      +-- testcase_01
+          |      +-- testcase_02
+          |      +-- testcase_03
+                   
+
+Test Suite files hold only the file names of the test cases (no path)
+
+
