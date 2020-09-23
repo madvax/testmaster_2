@@ -36,6 +36,16 @@ WARNING        = "\033[33mWARNING\033[0m" #  \___ Linux-specific colorization
 FAILED         = "\033[31mFAILED\033[0m"  #  /
 ERROR          = "\033[31mERROR\033[0m"   # /
 
+# Test case states 
+not_ready = "not ready" #  File not found or target not specified 
+ready     = "ready"     # File exists and target is specified
+running   = "running"   #  Test case is being execuited
+passed    = "passed"    # Test case has finished without error or failed step
+failed    = "failed"    # Test case failed one or more steps 
+error     = "error"     # Test case encountered an error during execution  
+test_case_states = [not_ready, ready, running, passed, failed, error]
+
+
 # Initialize the logger
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger()
@@ -47,8 +57,8 @@ try:
    from PyQt5.QtWidgets import (QGridLayout, QVBoxLayout, QHBoxLayout, QBoxLayout, QSplashScreen)
    from PyQt5.QtWidgets import (QLabel, QComboBox, QTabWidget, QTextEdit, QLineEdit, QDialogButtonBox)
    from PyQt5.QtWidgets import (QSlider, QDial, QScrollBar, QListWidget, QListWidgetItem)
-   from PyQt5.QtWidgets import (QInputDialog, QLineEdit, QFileDialog, QDialog)
-   from PyQt5.QtGui import (QPixmap, QFont, QIcon, QStatusTipEvent)
+   from PyQt5.QtWidgets import (QInputDialog, QLineEdit, QFileDialog, QDialog, QMessageBox)
+   from PyQt5.QtGui import (QPixmap, QFont, QIcon, QStatusTipEvent, QColor)
    from PyQt5.QtCore import (Qt, pyqtSignal, QSize, QUrl, QEvent)
 
 except ModuleNotFoundError:
@@ -60,7 +70,7 @@ except ModuleNotFoundError:
 # Import custom libraries 
 sys.path.append(LIBRARY_PATH)
 from config import read_config_file
-
+from console import Console
 
 
 # ============================================================================= Clickable Image 
@@ -69,6 +79,25 @@ from config import read_config_file
 # to that object.
 class ClickableQLabel(QLabel):
    """ Extends the QLable object to make it clickable """
+
+   def __init(self, parent):
+      super().__init__(parent)
+      clicked = pyqtSignal()
+      rightClicked = pyqtSignal()
+
+   def mousePressEvent(self, event):
+      if event.button() == Qt.RightButton:
+         self.rightClicked.emit()
+      else:
+         self.clicked.emit()
+
+
+# ============================================================================= Clickable Icon
+# Create an object of type Icon that is clickable. To do this we have to 
+# create a generic QWidget and inherit from Qicon then add the click() method
+# to that object.
+class ClickableQIcon(QIcon):
+   """ Extends the QIcon object to make it clickable """
 
    def __init(self, parent):
       super().__init__(parent)
@@ -99,7 +128,7 @@ class MainWindow(QMainWindow):
       
       super(MainWindow, self).__init__(parent)
 
-      # Create and assign a main_widget and main layout
+      # Create and assign a main_widget and main_layout for the main window 
       self.main_widget = QWidget(self)
       self.main_layout = QGridLayout(self.main_widget)
       self.setCentralWidget(self.main_widget)
@@ -108,14 +137,36 @@ class MainWindow(QMainWindow):
       # test cases folder that hold individula test cases. 
       self.update_list_of_test_targets()  
       self.loaded_test_suite  = ""
-      self.loaded_test_target = ""
+      # self.loaded_test_target = ""
+      self.loaded_target = ""
+      self.test_case_full_pathname_list = []
+      self.test_case_results = []
+
+      self.pass_color    = QColor(100, 255, 100) # light green 
+      self.fail_color    = QColor(255, 100, 100) # light red 
+      self.running_color = QColor(255, 255, 100) # light yellow
+
+      self.ready_icon     = ClickableQIcon( os.path.join(RESOURCE_PATH, "ready.png"   ) )
+      self.running_icon   = ClickableQIcon( os.path.join(RESOURCE_PATH, "running.jpg" ) )
+      self.passed_icon    = ClickableQIcon( os.path.join(RESOURCE_PATH, "passed.png"  ) )
+      self.failed_icon    = ClickableQIcon( os.path.join(RESOURCE_PATH, "failed.jpg"  ) )
+      self.not_ready_icon = ClickableQIcon( os.path.join(RESOURCE_PATH, "no.png"      ) )
+      self.running_icon   = ClickableQIcon( os.path.join(RESOURCE_PATH, "running.jpg" ) )
+      self.open_icon      = ClickableQIcon( os.path.join(RESOURCE_PATH, "open.png"    ) )
+      self.exit_icon      = ClickableQIcon( os.path.join(RESOURCE_PATH, "exit.png"    ) )
+      self.about_icon     = ClickableQIcon( os.path.join(RESOURCE_PATH, "about.png"   ) )
+      self.help_icon      = ClickableQIcon( os.path.join(RESOURCE_PATH, "help.png"    ) )
+      self.target_icon    = ClickableQIcon( os.path.join(RESOURCE_PATH, "target.png"  ) )
+
+      # Each test suite result will be stored in a data time stamped folder 
+      # so we are going to need a string to hold that value. Each time the 
+      # run_test_suite() method is called we will get an updated value for 
+      # this date_time_string
+      self.date_time_string = time.strftime("%Y%m%d%H%M%S", time.localtime())
 
 
-
-
-
-      # --- Define the frames for the main/central widget in the main window. The 
-      #     frames are the large division of the windows in which widgets are placed. 
+      # --- Define the frames for the main window / central widget in the main window. 
+      #     The frames are the large division of the windows in which widgets are placed. 
       #     Here is the intended frame layout for the MainWindow: 
       #    +-----------------------------------------+
       #    |         Status and Summary Frame        |
@@ -154,6 +205,10 @@ class MainWindow(QMainWindow):
       # --- Menu Bar for the top of the main window
       print("call create_menu_bar()")
       self.create_menu_bar()
+
+      # --- Main Window Geometry 
+      self.setGeometry(100, 100, 1200, 800)
+
 
       # --- Create the About Dialog 
       self.about_dialog = QDialog()
@@ -207,7 +262,7 @@ class MainWindow(QMainWindow):
       self.logo_image.setMaximumHeight(100)
 
       # --- Suite and Target labels
-      self.test_suite_label = QLabel("Test Suite: None")
+      self.test_suite_label  = QLabel("Test Suite: None")
       self.test_target_label = QLabel("Test Target: None")
 
       # --- Generic spacer to help with alignemtns 
@@ -219,13 +274,20 @@ class MainWindow(QMainWindow):
       status_frame_layout.addWidget(self.test_target_label , 1, 1, 1, 1, Qt.AlignLeft | Qt.AlignVCenter )
       status_frame_layout.addWidget(self.spacer            , 0, 4, 1, 1, Qt.AlignLeft | Qt.AlignTop     ) 
       status_frame_layout.addWidget(self.spacer            , 0, 5, 1, 3, Qt.AlignLeft | Qt.AlignTop     ) 
-
-
       self.status_frame.setLayout(status_frame_layout) 
 
 
-      # --- Main Window Geometry 
-      self.setGeometry(100, 100, 1200, 800)
+      # -----------------------------------------------------------------------TEST CASE FRAME WIDGETS 
+      self.testcase_list_widget = QListWidget()
+      self.testcase_list_widget.setLineWidth(3)
+      testcase_layout = QVBoxLayout()
+      testcase_layout.addWidget(self.testcase_list_widget)
+      self.case_frame.setLayout(testcase_layout)   
+
+
+
+
+
 
    # -------------------------------------------------------------------------- create_menu_bar()
    def create_menu_bar(self):
@@ -254,7 +316,7 @@ class MainWindow(QMainWindow):
       run_tests_action = QAction(QIcon(os.path.join(MY_PATH, '../res/run.png')), '&Run Test', self)
       run_tests_action.setShortcut('Ctrl+R')
       run_tests_action.setStatusTip('Run tests agains the target')
-      run_tests_action.triggered.connect( self.open_test_suite)
+      run_tests_action.triggered.connect( self.run_test_suite)
       # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
       stop_tests_action = QAction(QIcon(os.path.join(MY_PATH, '../res/stop.png')), '&Stop Test', self)
       stop_tests_action.setShortcut('Ctrl+S')
@@ -289,12 +351,16 @@ class MainWindow(QMainWindow):
       helpMenu.addAction(about_action)
 
 
-
-
    # -------------------------------------------------------------------------- open_test_suite() 
    def open_test_suite(self):
-      """ Open a test suite file and load the test cases from the suite into the tool. """ 
+      """ Open a test suite file and loads the test cases from the suite into the tool.
+          There is a chained process flow when you open a test suite:
+             open_test_suite() calls select_target() 
+             select_target then calls load_test_cases() 
+          Once a test suite is opened, the user may later choose a new target for the same 
+          test suite as teh select_target() method call load_test_cases().      """ 
       
+      self.test_case_data_list = []
       url = QUrl()                                    # This File Dialog should start in  
       url.setScheme("file")                           # the test suites folder by default. 
       url.setPath(   "%s/../testsuites" %MY_PATH   )  # TODO: os.path.join()
@@ -307,30 +373,116 @@ class MainWindow(QMainWindow):
          self.test_suite_label.setText("Test Suite: %s" %self.testsuite_file.split('/')[LAST])
          message = "Loaded Test Suite:  %s" %self.testsuite_file 
          logger.info(message)
-         self.load_test_cases()
+         # Crate a list of test cases from the test suite file. However, these 
+         # test cases are only file names with not path. We'll have to add the path 
+         # based on the target selected.   
+         try:
+            f = open(self.testsuite_file, 'r')
+            lines = f.readlines()
+            f.close()
+         except:
+            logger.error("Unalbe to read test cases from test suite %s" %self.testsuite_file) 
+            lines = []
+
+         self.test_case_file_list = [] # a list of test case file names with no paths
+         for line in lines:
+            line = line.strip()
+            if len(line) < 1:
+               pass
+            elif line.startswith('#'):
+               pass
+            else:
+               self.test_case_file_list.append(line)     
+
+         self.test_case_count = len(self.test_case_file_list)
+         message = "Found %d test cases in %s" %(self.test_case_count, self.testsuite_file.split('/')[LAST])
+         logger.info(message)
+         self.status_bar.showMessage(message)  
+
+         # open the select a test target for this suite
+         self.select_target()  
+
+         # load the test cases 
+         # logger.info("Back from select_target() ... calling load_test_cases()")
+         # self.load_test_cases()
 
    # -------------------------------------------------------------------------- load_test_cases()
    def load_test_cases(self):
-      """ """
-      self.test_cases = []
-      f = open(self.testsuite_file, 'r')
-      lines = f.readlines()
-      f.close()
-      for line in lines:                  # Build the list of test cases to execute. 
-         line = line.strip()              # Skip any lines in the test suite that 
-         if line == '':                   # are either blank lines or comment lines
-            pass                          # that start with a pound sign '#'.   
-         elif line.startswith('#'):       #
-            pass                          #
-         else:                            #
-            self.test_cases.append(line)  #             
-      if len(self.test_cases) > 0:
-         self.test_case_count = len(self.test_cases)
-         message = "Loaded %d test cases from %s" %(self.test_case_count, self.testsuite_file.split('/')[LAST])
-         self.status_bar.showMessage(message)  
-         print(self.test_cases)  
+      """ When we load the test cases from the test suite file we populate the 
+          test case frame a.k.a. cases frame with the test cases. However, 
+          before we put up the green run icon we have to ensure that a target 
+          as been selected and using that target, verify that the test cases 
+          requested in the test suite are available in the target folder.    """
+      self.test_cases = []                # Start with an empty list of test cases 
+      self.testcase_list_widget.clear()   # Clear any test cases from the test case frame 
+      self.testcase_list_widget_items_list = []
+      
+      
+      if len(self.test_case_file_list) > 0:
+         
+         counter = 0 
+ 
+         for t in self.test_case_file_list:
+ 
+            counter += 1
+            logger.info("Loading test case %d of %d %s" %(counter, len(self.test_case_file_list), t) )
+
+ 
+ 
+            # In this loop the variable t is the file name of a candidate test case 
+            # without the path of the file. We will need to use the target to 
+            # generate a ful path file name for the test case in this loop.
+            # 
+            # Create a list of test case data where each item in the list is a 
+            # dictionary with two key-valie pairs: name an state. The name is 
+            # the file name of the script as read from the test suite file and 
+            # the state is one of: 
+            #       "not ready" - File not found or target not specified 
+            #       "ready"     - File exists and target is specified
+            #       "running"   - Test case is being execuited
+            #       "passed"    - Test case has finished without error or failed step
+            #       "failed"    - Test case failed one or more steps 
+            #       "error"     - Test case finished with and error, not the same as a failure 
+
+            # Definethe full path of the candidate test case 
+            test_case_path_filename = ""
+            test_case_path_filename =  os.path.join(  os.path.join(TESTCASE_PATH, self.loaded_target), t  )
+            message = "Test case full path %s" %(test_case_path_filename) 
+            logger.info(message)
+
+            test_case_record = {} # used to hold the data for a test case 
+
+            # if the full path test case file exists then we mark it a ready
+            # otherwise we mark it a not ready  
+            if os.path.isfile( test_case_path_filename  ):
+               test_case_record = {"name": t, "state":ready, "file": test_case_path_filename}   
+               #                                                                 # \  ***    This is the list of    ***
+               self.test_case_full_pathname_list.append(test_case_path_filename) #  > ***   executable test cases   ***
+               #                                                                 # /  *** used for "run test suite" *** 
+            else: 
+               test_case_record = {"name": t, "state":not_ready, "file": None}   
+             
+            # define the icon for the test case based on the state of the test case 
+            if test_case_record["state"] == ready:  
+               test_case_icon = ClickableQIcon(  os.path.join(RESOURCE_PATH, "run.png")  )
+            else:   
+               test_case_icon = ClickableQIcon(  os.path.join(RESOURCE_PATH, "no.png")  )
+            test_case_record["icon"] = test_case_icon
+
+            # At this point the test case reacod is a dictionary with the key-value
+            # paris listed below:
+            # {"same": string, "state", string, "file": full_path_filename, "icon": ClickableIcon}
+            # uisng this date we can create a QListItem and add it to the testcase_list_widget. 
+            message = "Adding test case %s to the test case list widget" %test_case_record["name"]
+            logger.info(message)
+            list_item = QListWidgetItem()
+            list_item.setText("Name: %s\nFile:%s\nState:%s" %(test_case_record["name"], test_case_record["file"], test_case_record["state"]))
+            list_item.setIcon(test_case_record["icon"])
+            self.testcase_list_widget.addItem(list_item)
+            self.testcase_list_widget_items_list.append(list_item)
       else:
-         message = "Failed to load any test cases from %s" %self.testsuite_file.split('/')[LAST]  
+         message = "Failed to load any test cases from %s" %self.testsuite_file.split('/')[LAST] 
+         logger.warning(message) 
          self.status_bar.showMessage(message)   
   
    # -------------------------------------------------------------------------- update_list_of_test_targets()
@@ -358,6 +510,159 @@ class MainWindow(QMainWindow):
          self.test_target_label.setText("Test Target: %s" %item)
          self.loaded_target = item
          logger.info("Loaded Test Target: %s" %item)   
+         
+         # load the test cases 
+         logger.info("Back from select_target() ... calling load_test_cases()")
+         self.load_test_cases()
+
+   # -------------------------------------------------------------------------- run_test_suite()
+   def run_test_suite(self):
+      """ Execute all of the tests in a test suite. The list of executables is 
+          stored in self.test_case_full_pathname_list. """ 
+          
+      if len(self.test_case_full_pathname_list) > 0:
+
+         self.suite_results_folder = os.path.join(RESULTS_HOME, time.strftime("%Y%m%d%H%M%S", time.localtime())   )
+         os.mkdir(self.suite_results_folder)
+         message = "Created suite results folder %s" %self.suite_results_folder
+         logger.info(message)
+
+         # intiialize a list of dictionaries to store the results of this test suite run
+         self.test_suite_results = []  
+
+         # This is the main loop for executing test cases.
+         # In this loop we create folders for the results 
+         # of each test case and call/run each test cases
+         # and provide the test cases results folder name 
+         # as the last argument to the test case invocation
+         # command. We also keep track of the test case 
+         # results and store them in the test case list: 
+         #  self.test_case_results   
+         counter = 0
+         for test_case in self.test_case_full_pathname_list:
+         
+            test_case_results = {}
+
+            counter += 1  
+
+            # Make the test case results folder
+            test_case_short_name = test_case.split('/')[LAST]   
+            if '.' in test_case_short_name:
+               test_case_short_name = test_case_short_name.split('.')[FIRST]
+            test_case_results_folder = os.path.join(self.suite_results_folder, test_case_short_name)
+            os.mkdir(test_case_results_folder)
+            message = "Created test case resulst folder %s" %test_case_results_folder
+            logger.info(message)
+
+
+            # Identify and use the test case list widget item for this test case 
+            list_item  = self.testcase_list_widget_items_list[counter - 1]
+            bg_color   = self.running_color
+            icon       = self.running_icon
+            text       = "Test: %s\nFile: %s\nState: Running" %(test_case.split('/')[LAST], test_case, )
+            self.set_test_case_list_wdiget_item(list_item, icon, bg_color, text )
+            message = "Running Test case %d of %d: %s " %(counter, len(self.test_case_full_pathname_list), test_case)
+            logger.info(message)
+            self.status_bar.showMessage(message)
+
+            self.repaint() # heavy sigh ...
+
+
+            # *************************
+            # *** RUN THE TEST CASE ***
+            # *************************
+            c = Console()
+            c.run(test_case)
+            if c.return_results()["return_code"] == 0:
+               list_item  = self.testcase_list_widget_items_list[counter - 1]
+               bg_color   = self.pass_color
+               icon       = self.passed_icon
+               text       = "Test: %s\nFile: %s\nState: PASSED" %(test_case.split('/')[LAST], test_case, )
+               self.set_test_case_list_wdiget_item(list_item, icon, bg_color, text )
+               test_case_results = {"testcase"       : test_case_short_name, 
+                                    "file"           : test_case, 
+                                    "result"         : "passed", 
+                                    "results_folder" : test_case_results_folder }
+            else:
+               list_item  = self.testcase_list_widget_items_list[counter - 1]
+               bg_color   = self.fail_color
+               icon       = self.failed_icon
+               text       = "Test: %s\nFile: %s\nState: FAIILED" %(test_case.split('/')[LAST], test_case, )
+               self.set_test_case_list_wdiget_item(list_item, icon, bg_color, text )
+               test_case_results = {"testcase"       : test_case_short_name, 
+                                    "file"           : test_case, 
+                                    "result"         : "failed", 
+                                    "results_folder" : test_case_results_folder }
+            self.repaint()
+
+            # Write the output and errors files to the test case results folder 
+            # output  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+            tc_output = c.return_results()["output"]
+            tc_output = tc_output.strip()
+            if len(tc_output) < 1:
+               pass
+            else:
+               output_file = os.path.join(test_case_results_folder, TC_OUTPUT_FILE) 
+               try:
+                  f = open(output_file, 'w')
+                  f.write(tc_output)
+                  f.close()
+               except Exception as e:
+                  message = "Ubnable to write to test case output file %s" %output_file
+                  logger.error(message)
+            # errors  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+            tc_errors = c.return_results()["error"]
+            tc_errors = tc_errors.strip()
+            if len(tc_errors) < 1:
+               pass
+            else:
+               errors_file = os.path.join(test_case_results_folder, TC_ERRORS_FILE) 
+               try:
+                  f = open(errors_file, 'w')
+                  f.write(tc_errors)
+                  f.close()
+               except Exception as e:
+                  message = "Ubnable to write to test case errors file %s" %errors_file
+                  logger.error(message)
+
+
+
+
+            # Test Suite results can be used later in summary reports or general reporting   
+            self.test_suite_results.append(test_case_results)
+
+
+            message = "test case %d of %d complete" %(counter, len(self.test_case_full_pathname_list))
+            self.status_bar.showMessage(message)
+            logger.info(message)
+            # Need a method for updateing all of the attributes of a list item 
+         
+         # Log the results
+         logger.info("Test suite results:")
+         logger.info(str(self.test_suite_results)) 
+
+      else:
+         message = "No test cases loaded. Nothing to do"
+         logger.warning(message)
+         mBox = QMessageBox()
+         mBox.setText(message)
+         mBox.setWindowTitle("Warning -- No test cases")
+         mBox.setIcon(QMessageBox.Warning)
+         mBox.setStandardButtons(QMessageBox.Ok)
+         mBox.exec_()
+
+
+   def set_test_case_list_wdiget_item(self, list_widget_item, icon , background_color, text ):
+      """ sets the properties of a test cacse list widget item
+             list_widget_item : test case list widget item 
+             icon             : QIcon or ClickableIcon 
+             background_color : Qt.QColor 
+             text             : test for the list idget item  
+          """
+      list_widget_item.setText(text)
+      list_widget_item.setBackground(background_color)
+      list_widget_item.setIcon(icon)
+
 
    # -------------------------------------------------------------------------- open_about() 
    def open_about(self):
