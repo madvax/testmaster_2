@@ -1,6 +1,9 @@
 #!/usr/bin/python3
 
-import logging
+# The Test Master II Program 
+# See the README and HELP files 
+# -- Madvax, September 2020
+
 # -----------------------------------------------------------------------------
 # Standard Library Imports
 import os
@@ -8,6 +11,9 @@ import sys
 import time
 from getopt import getopt
 import logging
+import selectors
+import subprocess
+import sys
 
 # -----------------------------------------------------------------------------
 # Some useful variables
@@ -45,11 +51,15 @@ failed    = "failed"    # Test case failed one or more steps
 error     = "error"     # Test case encountered an error during execution  
 test_case_states = [not_ready, ready, running, passed, failed, error]
 
-
 # Initialize the logger
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger()
 logger.info("%s Started =======================================================" % ME)
+
+# Set the python_interpreter value 
+PYTHON_INTERPRETER = sys.executable
+message = "Using Python interpreter %s" %PYTHON_INTERPRETER 
+logger.info(message)
 
 # Try to import PyQt5 
 try:
@@ -58,7 +68,7 @@ try:
    from PyQt5.QtWidgets import (QLabel, QComboBox, QTabWidget, QTextEdit, QLineEdit, QDialogButtonBox)
    from PyQt5.QtWidgets import (QSlider, QDial, QScrollBar, QListWidget, QListWidgetItem)
    from PyQt5.QtWidgets import (QInputDialog, QLineEdit, QFileDialog, QDialog, QMessageBox)
-   from PyQt5.QtGui import (QPixmap, QFont, QIcon, QStatusTipEvent, QColor)
+   from PyQt5.QtGui import (QPixmap, QFont, QIcon, QStatusTipEvent, QColor,  QPalette, QTextCursor)
    from PyQt5.QtCore import (Qt, pyqtSignal, QSize, QUrl, QEvent)
 
 except ModuleNotFoundError:
@@ -71,7 +81,6 @@ except ModuleNotFoundError:
 sys.path.append(LIBRARY_PATH)
 from config import read_config_file
 from console import Console
-
 
 # ============================================================================= Clickable Image 
 # Create an object of type Image that is clickable. To do this we have to 
@@ -91,7 +100,6 @@ class ClickableQLabel(QLabel):
       else:
          self.clicked.emit()
 
-
 # ============================================================================= Clickable Icon
 # Create an object of type Icon that is clickable. To do this we have to 
 # create a generic QWidget and inherit from Qicon then add the click() method
@@ -109,7 +117,6 @@ class ClickableQIcon(QIcon):
          self.rightClicked.emit()
       else:
          self.clicked.emit()
-
 
 # ============================================================================= Main Window
 # Create the main window and inherit from the base class Qwidget
@@ -164,7 +171,6 @@ class MainWindow(QMainWindow):
       # this date_time_string
       self.date_time_string = time.strftime("%Y%m%d%H%M%S", time.localtime())
 
-
       # --- Define the frames for the main window / central widget in the main window. 
       #     The frames are the large division of the windows in which widgets are placed. 
       #     Here is the intended frame layout for the MainWindow: 
@@ -190,9 +196,9 @@ class MainWindow(QMainWindow):
       #     to the main window
       #                         (     Frame,          Row, Col, RSpan, CSpan, Allignment )  
       self.main_layout.addWidget(self.status_frame,     0,   0,     5,    12) #, Qt.AlignLeft    | Qt.AlignTop)
-      self.main_layout.addWidget(self.suite_frame,      6,   0,     7,     6) #, Qt.AlignHCenter | Qt.AlignTop)
+      self.main_layout.addWidget(self.suite_frame,     13,   0,     8,     6) #, Qt.AlignHCenter | Qt.AlignTop)
       self.main_layout.addWidget(self.case_frame,       6,   6,    15,     6)
-      self.main_layout.addWidget(self.console_frame,   13,   0,     8,     6)
+      self.main_layout.addWidget(self.console_frame,    6,   0,     7,     6)
       
       # Set the main_layout as the main_wigit
       self.main_widget.setLayout(self.main_layout)
@@ -208,7 +214,6 @@ class MainWindow(QMainWindow):
 
       # --- Main Window Geometry 
       self.setGeometry(100, 100, 1200, 800)
-
 
       # --- Create the About Dialog 
       self.about_dialog = QDialog()
@@ -246,8 +251,6 @@ class MainWindow(QMainWindow):
       self.help_dialog.setLayout(help_layout)
       self.help_dialog.setGeometry(150,150, 500,500)
 
-
-
       # ----------------------------------------------------------------------- Status Frame Widgets 
       # --- Create and populate the product pull down with products  
       #     taken from the test cases folder
@@ -270,24 +273,44 @@ class MainWindow(QMainWindow):
       # --- Status Frame Layout and widget placement 
       status_frame_layout = QGridLayout()
       status_frame_layout.addWidget(self.logo_image        , 0, 0, 3, 1, Qt.AlignLeft | Qt.AlignTop     )
-      status_frame_layout.addWidget(self.test_suite_label  , 0, 1, 1, 1, Qt.AlignLeft | Qt.AlignVCenter )
-      status_frame_layout.addWidget(self.test_target_label , 1, 1, 1, 1, Qt.AlignLeft | Qt.AlignVCenter )
+      status_frame_layout.addWidget(self.test_suite_label  , 1, 1, 1, 1, Qt.AlignLeft | Qt.AlignVCenter )
+      status_frame_layout.addWidget(self.test_target_label , 0, 1, 1, 1, Qt.AlignLeft | Qt.AlignVCenter )
       status_frame_layout.addWidget(self.spacer            , 0, 4, 1, 1, Qt.AlignLeft | Qt.AlignTop     ) 
       status_frame_layout.addWidget(self.spacer            , 0, 5, 1, 3, Qt.AlignLeft | Qt.AlignTop     ) 
       self.status_frame.setLayout(status_frame_layout) 
 
+      # ----------------------------------------------------------------------- SUITE FRAME WIDGETS
+      palette = QPalette()
+      palette.setColor(  QPalette.Text,  QColor(  0, 75,   0)   ) # Very Dark  green text on a 
+      palette.setColor(  QPalette.Base,  QColor(200, 255, 200)   ) # very light green background
+      text_area_font = QFont("Courier", 15, QFont.Bold)
+      self.suite_text_area = QTextEdit()
+      self.suite_text_area.setPalette(palette)
+      self.suite_text_area.setFont(text_area_font)
+      suite_layout = QVBoxLayout()
+      suite_layout.addWidget(self.suite_text_area)
+      self.suite_frame.setLayout(suite_layout)
+      self.suite_text_area.setText("No Test Suite Loaded")
 
-      # -----------------------------------------------------------------------TEST CASE FRAME WIDGETS 
+      # ----------------------------------------------------------------------- CONSOLE FRAME WIDGETS
+      palette = QPalette()
+      palette.setColor(QPalette.Text, Qt.white) # White text on a 
+      palette.setColor(QPalette.Base, Qt.black) # black background
+      text_area_font = QFont("Courier", 15, QFont.Bold)
+      self.console_text_area = QTextEdit()
+      self.console_text_area.setPalette(palette)
+      self.console_text_area.setFont(text_area_font)
+      console_layout = QVBoxLayout()
+      console_layout.addWidget(self.console_text_area)
+      self.console_frame.setLayout(console_layout)
+      self.console_text_area.setText("Console Area")
+
+      # ----------------------------------------------------------------------- TEST CASE FRAME WIDGETS 
       self.testcase_list_widget = QListWidget()
       self.testcase_list_widget.setLineWidth(3)
       testcase_layout = QVBoxLayout()
       testcase_layout.addWidget(self.testcase_list_widget)
       self.case_frame.setLayout(testcase_layout)   
-
-
-
-
-
 
    # -------------------------------------------------------------------------- create_menu_bar()
    def create_menu_bar(self):
@@ -333,8 +356,6 @@ class MainWindow(QMainWindow):
       about_action.setStatusTip('About Test MAster II')
       about_action.triggered.connect( self.open_about)
 
-
-
       # Add actions to the menu bar 
       fileMenu = menu_bar.addMenu('&File')
       testMenu = menu_bar.addMenu('&Test')
@@ -349,7 +370,6 @@ class MainWindow(QMainWindow):
       # - - - - - - - - - - - - - - - - - - -
       helpMenu.addAction(help_action)
       helpMenu.addAction(about_action)
-
 
    # -------------------------------------------------------------------------- open_test_suite() 
    def open_test_suite(self):
@@ -380,8 +400,14 @@ class MainWindow(QMainWindow):
             f = open(self.testsuite_file, 'r')
             lines = f.readlines()
             f.close()
+            self.suite_text_area.clear()
+            for line in lines:
+               line = line.strip()
+               self.suite_text_area.append(line)
          except:
-            logger.error("Unalbe to read test cases from test suite %s" %self.testsuite_file) 
+            message = "Unalbe to read test cases from test suite %s" %self.testsuite_file
+            logger.error(message)
+            self.suite_text_area.setText(message) 
             lines = []
 
          self.test_case_file_list = [] # a list of test case file names with no paths
@@ -417,7 +443,6 @@ class MainWindow(QMainWindow):
       self.testcase_list_widget.clear()   # Clear any test cases from the test case frame 
       self.testcase_list_widget_items_list = []
       
-      
       if len(self.test_case_file_list) > 0:
          
          counter = 0 
@@ -427,8 +452,6 @@ class MainWindow(QMainWindow):
             counter += 1
             logger.info("Loading test case %d of %d %s" %(counter, len(self.test_case_file_list), t) )
 
- 
- 
             # In this loop the variable t is the file name of a candidate test case 
             # without the path of the file. We will need to use the target to 
             # generate a ful path file name for the test case in this loop.
@@ -542,6 +565,8 @@ class MainWindow(QMainWindow):
          for test_case in self.test_case_full_pathname_list:
          
             test_case_results = {}
+            self.active_test_case = test_case
+            self.active_test_case_results_folder = ""
 
             counter += 1  
 
@@ -551,9 +576,9 @@ class MainWindow(QMainWindow):
                test_case_short_name = test_case_short_name.split('.')[FIRST]
             test_case_results_folder = os.path.join(self.suite_results_folder, test_case_short_name)
             os.mkdir(test_case_results_folder)
+            self.active_test_case_results_folder = test_case_results_folder
             message = "Created test case resulst folder %s" %test_case_results_folder
             logger.info(message)
-
 
             # Identify and use the test case list widget item for this test case 
             list_item  = self.testcase_list_widget_items_list[counter - 1]
@@ -567,13 +592,11 @@ class MainWindow(QMainWindow):
 
             self.repaint() # heavy sigh ...
 
-
             # *************************
             # *** RUN THE TEST CASE ***
             # *************************
-            c = Console()
-            c.run(test_case)
-            if c.return_results()["return_code"] == 0:
+            results = self.execute_test_case()
+            if results["return_code"] == 0:
                list_item  = self.testcase_list_widget_items_list[counter - 1]
                bg_color   = self.pass_color
                icon       = self.passed_icon
@@ -597,7 +620,7 @@ class MainWindow(QMainWindow):
 
             # Write the output and errors files to the test case results folder 
             # output  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-            tc_output = c.return_results()["output"]
+            tc_output = results["output"]
             tc_output = tc_output.strip()
             if len(tc_output) < 1:
                pass
@@ -611,7 +634,7 @@ class MainWindow(QMainWindow):
                   message = "Ubnable to write to test case output file %s" %output_file
                   logger.error(message)
             # errors  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-            tc_errors = c.return_results()["error"]
+            tc_errors = results["error"]
             tc_errors = tc_errors.strip()
             if len(tc_errors) < 1:
                pass
@@ -625,12 +648,8 @@ class MainWindow(QMainWindow):
                   message = "Ubnable to write to test case errors file %s" %errors_file
                   logger.error(message)
 
-
-
-
             # Test Suite results can be used later in summary reports or general reporting   
             self.test_suite_results.append(test_case_results)
-
 
             message = "test case %d of %d complete" %(counter, len(self.test_case_full_pathname_list))
             self.status_bar.showMessage(message)
@@ -651,7 +670,7 @@ class MainWindow(QMainWindow):
          mBox.setStandardButtons(QMessageBox.Ok)
          mBox.exec_()
 
-
+   # -------------------------------------------------------------------------- set_test_case_list_wdiget_item()
    def set_test_case_list_wdiget_item(self, list_widget_item, icon , background_color, text ):
       """ sets the properties of a test cacse list widget item
              list_widget_item : test case list widget item 
@@ -674,7 +693,51 @@ class MainWindow(QMainWindow):
       """ """
       self.help_dialog.exec()
 
+   # -------------------------------------------------------------------------- execute_test_case()
+   def execute_test_case(self):
+      """ """
 
+      # If the active test case is a python script then be sure to run it 
+      # UNBUFFERED mode otehrwise just execute the active test case 
+      if self.active_test_case.endswith('.py') or self.active_test_case.endswith('.Py') or self.active_test_case.endswith('.PY') :
+         command_list = [PYTHON_INTERPRETER, "-u", self.active_test_case]
+      else:
+         command_list = [self.active_test_case]
+      message = "RUNING:\n%s\n\nRESULTS IN:\n%s\n\n" %(self.active_test_case, self.active_test_case_results_folder)
+      logger.info(message)   
+
+      p = subprocess.Popen(command_list           , 
+                           stdout=subprocess.PIPE ,
+                           stderr=subprocess.PIPE )
+
+      output_buffer  = ""
+      error_buffer   = ""
+      return_code    = 127
+
+      sel = selectors.DefaultSelector()
+      sel.register(p.stdout, selectors.EVENT_READ)
+      sel.register(p.stderr, selectors.EVENT_READ)
+      
+      while p.poll() == None:
+         for key, _ in sel.select():
+            
+            data = key.fileobj.read1().decode()
+            if not data:
+               break
+            if key.fileobj is p.stdout:
+               output_buffer += data             
+            else:
+               error_buffer += data   
+
+            data = "%s" %str(data).strip()
+            # text_buffer += data
+            self.console_text_area.append(data)
+            self.console_text_area.moveCursor(QTextCursor.End)
+            self.repaint()   
+   
+      return {"return_code": p.poll()      ,
+              "output"     : output_buffer ,
+              "error"      : error_buffer  }   
 
    # -------------------------------------------------------------------------- event()
    def event(self, e):
